@@ -121,7 +121,8 @@ async function run(): Promise<void> {
           const artifactName = `${title} (${bundleName})`
           core.info(`Creating artifact ${artifactName}`)
 
-          const artifactsDirectory = dirname(uploadBundlePath)
+          const rootDirectory = dirname(uploadBundlePath)
+          const artifactsDirectory = dirname(rootDirectory)
           const parentDirectory = dirname(artifactsDirectory)
 
           core.info(`Uploading artifact ${artifactName}`)
