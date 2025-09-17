@@ -125,7 +125,7 @@ async function run(): Promise<void> {
           core.info(`Uploading artifact ${artifactName}`)
           await artifactClient.uploadArtifact(
             artifactName,
-            [bundleName],
+            [uploadBundlePath],
             rootDirectory
           )
         }
