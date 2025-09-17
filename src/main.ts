@@ -121,7 +121,7 @@ async function run(): Promise<void> {
           const rootDir = path.dirname(uploadBundlePath)
           await artifactClient.uploadArtifact(
             artifactName,
-            [`./${bundleName}`],
+            [uploadBundlePath],
             rootDir
           )
         }
