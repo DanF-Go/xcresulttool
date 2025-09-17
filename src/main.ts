@@ -2,6 +2,7 @@ import * as artifact from '@actions/artifact'
 import * as core from '@actions/core'
 import * as exec from '@actions/exec'
 import * as github from '@actions/github'
+import * as glob from '@actions/glob'
 import * as os from 'os'
 import * as path from 'path'
 import {Formatter} from './formatter'
@@ -118,11 +119,13 @@ async function run(): Promise<void> {
 
           const artifactName = `${title} (${bundleName})`
           core.info(`Creating artifact ${artifactName}`)
-          const rootDir = path.dirname(uploadBundlePath)
+          const rootDirectory = path.dirname(uploadBundlePath)
+          const globber = await glob.create(uploadBundlePath)
+          const files: string[] = await globber.glob()
           await artifactClient.uploadArtifact(
             artifactName,
-            [uploadBundlePath],
-            rootDir
+            files,
+            rootDirectory
           )
         }
       }
