@@ -120,13 +120,10 @@ async function run(): Promise<void> {
           const artifactName = `${title} (${bundleName})`
           core.info(`Creating artifact ${artifactName}`)
 
-          const globber = await glob.create(uploadBundlePath)
+          const rootDir = path.dirname(uploadBundlePath)
+          const globber = await glob.create(rootDir)
           const files: string[] = await globber.glob()
-          await artifactClient.uploadArtifact(
-            artifactName,
-            files,
-            uploadBundlePath
-          )
+          await artifactClient.uploadArtifact(artifactName, files, rootDir)
         }
       }
     }
