@@ -5,7 +5,6 @@ import * as github from '@actions/github'
 import * as glob from '@actions/glob'
 import * as os from 'os'
 import * as path from 'path'
-import {dirname} from 'path'
 import {Formatter} from './formatter'
 import {Octokit} from '@octokit/action'
 import {promises} from 'fs'
@@ -121,13 +120,13 @@ async function run(): Promise<void> {
           const artifactName = `${title} (${bundleName})`
           core.info(`Creating artifact ${artifactName}`)
 
-          const rootDirectory = dirname(uploadBundlePath)
           const globber = await glob.create(uploadBundlePath)
           const files: string[] = await globber.glob()
+          const searchPaths: string[] = globber.getSearchPaths()
           await artifactClient.uploadArtifact(
             artifactName,
             files,
-            rootDirectory
+            searchPaths[0]
           )
         }
       }
