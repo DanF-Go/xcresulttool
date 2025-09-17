@@ -7,7 +7,6 @@ import * as path from 'path'
 import {dirname} from 'path'
 import {Formatter} from './formatter'
 import {Octokit} from '@octokit/action'
-import {glob} from 'glob'
 import {promises} from 'fs'
 const {stat} = promises
 
