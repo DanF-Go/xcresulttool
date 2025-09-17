@@ -7,6 +7,7 @@ import * as path from 'path'
 import {dirname} from 'path'
 import {Formatter} from './formatter'
 import {Octokit} from '@octokit/action'
+import {glob} from 'glob'
 import {promises} from 'fs'
 const {stat} = promises
 
@@ -122,12 +123,19 @@ async function run(): Promise<void> {
 
           const rootDirectory = dirname(uploadBundlePath)
 
-          core.info(`Uploading artifact ${artifactName}`)
-          await artifactClient.uploadArtifact(
-            artifactName,
-            [uploadBundlePath],
-            rootDirectory
-          )
+          glob(uploadBundlePath, async (error, files) => {
+            if (error) {
+              core.error(error)
+            }
+            if (files.length) {
+              core.info(`Uploading artifact ${artifactName}`)
+              await artifactClient.uploadArtifact(
+                artifactName,
+                files,
+                rootDirectory
+              )
+            }
+          })
         }
       }
     }
