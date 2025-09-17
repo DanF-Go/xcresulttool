@@ -114,17 +114,52 @@ async function run(): Promise<void> {
             continue
           }
 
+          const globber = await glob.create(uploadBundlePath)
           const artifactClient = new artifact.DefaultArtifactClient()
           const bundleName = path.basename(uploadBundlePath)
 
           const artifactName = `${title} (${bundleName})`
           core.info(`Creating artifact ${artifactName}`)
+
+          const searchResults: string[] = []
+          const rawSearchResults: string[] = await globber.glob()
+
+          /*
+            Files are saved with case insensitivity. Uploading both a.txt and A.txt will files to be overwritten
+            Detect any files that could be overwritten for user awareness
+          */
+          const set = new Set<string>()
+
+          /*
+            Directories will be rejected if attempted to be uploaded. This includes just empty
+            directories so filter any directories out from the raw search results
+          */
+          for (const searchResult of rawSearchResults) {
+            const fileStats = await stat(searchResult)
+            // isDirectory() returns false for symlinks if using fs.lstat(), make sure to use fs.stat() instead
+            if (!fileStats.isDirectory()) {
+              searchResults.push(searchResult)
+
+              // detect any files that would be overwritten because of case insensitivity
+              if (set.has(searchResult.toLowerCase())) {
+                core.info(
+                  `Uploads are case insensitive: ${searchResult} was detected that it will be overwritten by another file with the same path`
+                )
+              } else {
+                set.add(searchResult.toLowerCase())
+              }
+            } else {
+              core.debug(
+                `Removing ${searchResult} from rawSearchResults because it is a directory`
+              )
+            }
+          }
+
           const rootDirectory = path.dirname(uploadBundlePath)
-          const globber = await glob.create(uploadBundlePath)
-          const files: string[] = await globber.glob()
+
           await artifactClient.uploadArtifact(
             artifactName,
-            files,
+            searchResults,
             rootDirectory
           )
         }
