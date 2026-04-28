@@ -374,7 +374,9 @@ class Formatter {
                 }, {});
                 const group = {};
                 for (const [identifier, details] of Object.entries(detailGroup)) {
-                    const [stats, duration] = details.reduce(([stats, duration], detail) => {
+                    // Deduplicate retries: group by test identifier and pick combined status
+                    const deduplicatedDetails = deduplicateRetries(details);
+                    const [stats, duration] = deduplicatedDetails.reduce(([stats, duration], detail) => {
                         const test = detail;
                         if (test.testStatus) {
                             switch (test.testStatus) {
@@ -528,30 +530,41 @@ class Formatter {
                         return groups;
                     }, {});
                     for (const [, details] of Object.entries(configurationGroup)) {
-                        for (const [, detail] of details.entries()) {
-                            const testResult = detail;
-                            if (testResult.summaryRef) {
-                                const summary = await this.parser.parse(testResult.summaryRef.id);
-                                const testFailureGroup = new report_1.TestFailureGroup(testResultSummaryName || '', summary.identifier || '', summary.name || '');
-                                testFailures.failureGroups.push(testFailureGroup);
-                                if (summary.failureSummaries) {
-                                    const testFailure = new report_1.TestFailure();
-                                    testFailureGroup.failures.push(testFailure);
-                                    const failureSummaries = collectFailureSummaries(summary.failureSummaries);
-                                    for (const failureSummary of failureSummaries) {
-                                        testFailure.lines.push(`${failureSummary.contents}`);
-                                        const workspace = path.dirname(`${testReport.creatingWorkspaceFilePath}`);
-                                        let filepath = '';
-                                        if (failureSummary.filePath) {
-                                            filepath = failureSummary.filePath.replace(`${workspace}/`, '');
-                                        }
-                                        if (filepath &&
-                                            failureSummary.lineNumber &&
-                                            failureSummary.message) {
-                                            const annotation = new report_1.Annotation(filepath, failureSummary.lineNumber, failureSummary.lineNumber, 'failure', failureSummary.message, failureSummary.issueType);
-                                            annotations.push(annotation);
-                                        }
-                                    }
+                        // For retried tests, only report the combined result once.
+                        // If any attempt passed, skip (not a failure). Otherwise use the last attempt.
+                        const statuses = details.map(d => d.testStatus);
+                        const anyPassed = statuses.some(s => s === 'Success');
+                        if (anyPassed) {
+                            continue;
+                        }
+                        // Use the last attempt's summary for the failure details
+                        const lastDetail = details[details.length - 1];
+                        if (!lastDetail?.summaryRef) {
+                            continue;
+                        }
+                        const summary = await this.parser.parse(lastDetail.summaryRef.id);
+                        const retryCount = details.length;
+                        const testFailureGroup = new report_1.TestFailureGroup(testResultSummaryName || '', summary.identifier || '', summary.name || '');
+                        if (retryCount > 1) {
+                            testFailureGroup.retryCount = retryCount;
+                        }
+                        testFailures.failureGroups.push(testFailureGroup);
+                        if (summary.failureSummaries) {
+                            const testFailure = new report_1.TestFailure();
+                            testFailureGroup.failures.push(testFailure);
+                            const failureSummaries = collectFailureSummaries(summary.failureSummaries);
+                            for (const failureSummary of failureSummaries) {
+                                testFailure.lines.push(`${failureSummary.contents}`);
+                                const workspace = path.dirname(`${testReport.creatingWorkspaceFilePath}`);
+                                let filepath = '';
+                                if (failureSummary.filePath) {
+                                    filepath = failureSummary.filePath.replace(`${workspace}/`, '');
+                                }
+                                if (filepath &&
+                                    failureSummary.lineNumber &&
+                                    failureSummary.message) {
+                                    const annotation = new report_1.Annotation(filepath, failureSummary.lineNumber, failureSummary.lineNumber, 'failure', failureSummary.message, failureSummary.issueType);
+                                    annotations.push(annotation);
                                 }
                             }
                         }
@@ -568,7 +581,10 @@ class Formatter {
                     const testIdentifier = `${failureGroup.summaryIdentifier}_${failureGroup.identifier}`;
                     const anchorName = (0, markdown_1.anchorIdentifier)(testIdentifier);
                     const anchorTag = (0, markdown_1.anchorNameTag)(`${testIdentifier}_failure-summary`);
-                    const testMethodLink = `${anchorTag}<a href="${anchorName}">${failureGroup.summaryIdentifier}/${failureGroup.identifier}</a>`;
+                    const retryBadge = failureGroup.retryCount && failureGroup.retryCount > 1
+                        ? ` <sub>(failed ${failureGroup.retryCount}/${failureGroup.retryCount} attempts)</sub>`
+                        : '';
+                    const testMethodLink = `${anchorTag}<a href="${anchorName}">${failureGroup.summaryIdentifier}/${failureGroup.identifier}</a>${retryBadge}`;
                     summaryFailures.push(`<h4>${testMethodLink}</h4>`);
                     for (const failure of failureGroup.failures) {
                         for (const line of failure.lines) {
@@ -988,6 +1004,31 @@ function collectFailureSummaries(failureSummaries) {
             contents,
             stackTrace: stackTrace || []
         };
+    });
+}
+// Deduplicate retried tests: group by identifier and return one synthetic entry
+// per unique test whose testStatus reflects the combined result (Success if any
+// attempt passed, otherwise Failure).
+function deduplicateRetries(details) {
+    const byIdentifier = {};
+    for (const detail of details) {
+        const id = detail.identifier || '';
+        if (byIdentifier[id]) {
+            byIdentifier[id].push(detail);
+        }
+        else {
+            byIdentifier[id] = [detail];
+        }
+    }
+    return Object.values(byIdentifier).map(group => {
+        if (group.length === 1) {
+            return group[0];
+        }
+        // Use the last entry as the base and override testStatus with combined result
+        const last = { ...group[group.length - 1] };
+        const anyPassed = group.some(d => d.testStatus === 'Success');
+        last.testStatus = anyPassed ? 'Success' : 'Failure';
+        return last;
     });
 }
 class FormatterOptions {
@@ -1576,6 +1617,7 @@ class TestFailureGroup {
     summaryIdentifier;
     identifier;
     name;
+    retryCount;
     failures = [];
     constructor(summaryIdentifier, identifier, name) {
         this.summaryIdentifier = summaryIdentifier;

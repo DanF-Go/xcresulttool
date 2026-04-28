@@ -128,6 +128,7 @@ export class TestFailureGroup {
   readonly summaryIdentifier: string
   readonly identifier: string
   readonly name: string
+  retryCount?: number
 
   readonly failures: TestFailure[] = []
 

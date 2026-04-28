@@ -181,7 +181,10 @@ export class Formatter {
 
         const group: TestSummaryStatsGroup = {}
         for (const [identifier, details] of Object.entries(detailGroup)) {
-          const [stats, duration] = details.reduce(
+          // Deduplicate retries: group by test identifier and pick combined status
+          const deduplicatedDetails = deduplicateRetries(details)
+
+          const [stats, duration] = deduplicatedDetails.reduce(
             ([stats, duration]: [TestSummaryStats, number], detail) => {
               const test = detail as ActionTestSummary
               if (test.testStatus) {
@@ -372,57 +375,71 @@ export class Formatter {
           )
 
           for (const [, details] of Object.entries(configurationGroup)) {
-            for (const [, detail] of details.entries()) {
-              const testResult = detail as ActionTestMetadata
+            // For retried tests, only report the combined result once.
+            // If any attempt passed, skip (not a failure). Otherwise use the last attempt.
+            const statuses = details.map(
+              d => (d as ActionTestSummary).testStatus
+            )
+            const anyPassed = statuses.some(s => s === 'Success')
+            if (anyPassed) {
+              continue
+            }
 
-              if (testResult.summaryRef) {
-                const summary: ActionTestSummary = await this.parser.parse(
-                  testResult.summaryRef.id
+            // Use the last attempt's summary for the failure details
+            const lastDetail = details[details.length - 1] as ActionTestMetadata
+            if (!lastDetail?.summaryRef) {
+              continue
+            }
+
+            const summary: ActionTestSummary = await this.parser.parse(
+              lastDetail.summaryRef.id
+            )
+
+            const retryCount = details.length
+            const testFailureGroup = new TestFailureGroup(
+              testResultSummaryName || '',
+              summary.identifier || '',
+              summary.name || ''
+            )
+            if (retryCount > 1) {
+              testFailureGroup.retryCount = retryCount
+            }
+            testFailures.failureGroups.push(testFailureGroup)
+
+            if (summary.failureSummaries) {
+              const testFailure = new TestFailure()
+              testFailureGroup.failures.push(testFailure)
+
+              const failureSummaries = collectFailureSummaries(
+                summary.failureSummaries
+              )
+              for (const failureSummary of failureSummaries) {
+                testFailure.lines.push(`${failureSummary.contents}`)
+
+                const workspace = path.dirname(
+                  `${testReport.creatingWorkspaceFilePath}`
                 )
-
-                const testFailureGroup = new TestFailureGroup(
-                  testResultSummaryName || '',
-                  summary.identifier || '',
-                  summary.name || ''
-                )
-                testFailures.failureGroups.push(testFailureGroup)
-
-                if (summary.failureSummaries) {
-                  const testFailure = new TestFailure()
-                  testFailureGroup.failures.push(testFailure)
-
-                  const failureSummaries = collectFailureSummaries(
-                    summary.failureSummaries
+                let filepath = ''
+                if (failureSummary.filePath) {
+                  filepath = failureSummary.filePath.replace(
+                    `${workspace}/`,
+                    ''
                   )
-                  for (const failureSummary of failureSummaries) {
-                    testFailure.lines.push(`${failureSummary.contents}`)
-
-                    const workspace = path.dirname(
-                      `${testReport.creatingWorkspaceFilePath}`
-                    )
-                    let filepath = ''
-                    if (failureSummary.filePath) {
-                      filepath = failureSummary.filePath.replace(
-                        `${workspace}/`,
-                        ''
-                      )
-                    }
-                    if (
-                      filepath &&
-                      failureSummary.lineNumber &&
-                      failureSummary.message
-                    ) {
-                      const annotation = new Annotation(
-                        filepath,
-                        failureSummary.lineNumber,
-                        failureSummary.lineNumber,
-                        'failure',
-                        failureSummary.message,
-                        failureSummary.issueType
-                      )
-                      annotations.push(annotation)
-                    }
-                  }
+                }
+                if (
+                  filepath &&
+                  failureSummary.lineNumber &&
+                  failureSummary.message
+                ) {
+                  const annotation = new Annotation(
+                    filepath,
+                    failureSummary.lineNumber,
+                    failureSummary.lineNumber,
+                    'failure',
+                    failureSummary.message,
+                    failureSummary.issueType
+                  )
+                  annotations.push(annotation)
                 }
               }
             }
@@ -441,7 +458,11 @@ export class Formatter {
           const testIdentifier = `${failureGroup.summaryIdentifier}_${failureGroup.identifier}`
           const anchorName = anchorIdentifier(testIdentifier)
           const anchorTag = anchorNameTag(`${testIdentifier}_failure-summary`)
-          const testMethodLink = `${anchorTag}<a href="${anchorName}">${failureGroup.summaryIdentifier}/${failureGroup.identifier}</a>`
+          const retryBadge =
+            failureGroup.retryCount && failureGroup.retryCount > 1
+              ? ` <sub>(failed ${failureGroup.retryCount}/${failureGroup.retryCount} attempts)</sub>`
+              : ''
+          const testMethodLink = `${anchorTag}<a href="${anchorName}">${failureGroup.summaryIdentifier}/${failureGroup.identifier}</a>${retryBadge}`
           summaryFailures.push(`<h4>${testMethodLink}</h4>`)
           for (const failure of failureGroup.failures) {
             for (const line of failure.lines) {
@@ -969,6 +990,36 @@ function collectFailureSummaries(
       contents,
       stackTrace: stackTrace || []
     } as FailureSummary
+  })
+}
+
+// Deduplicate retried tests: group by identifier and return one synthetic entry
+// per unique test whose testStatus reflects the combined result (Success if any
+// attempt passed, otherwise Failure).
+function deduplicateRetries(details: actionTestSummaries): actionTestSummaries {
+  const byIdentifier: {[id: string]: actionTestSummaries} = {}
+  for (const detail of details) {
+    const id = detail.identifier || ''
+    if (byIdentifier[id]) {
+      byIdentifier[id].push(detail)
+    } else {
+      byIdentifier[id] = [detail]
+    }
+  }
+
+  return Object.values(byIdentifier).map(group => {
+    if (group.length === 1) {
+      return group[0]
+    }
+    // Use the last entry as the base and override testStatus with combined result
+    const last = {...group[group.length - 1]} as ActionTestSummary & {
+      group?: string
+    }
+    const anyPassed = group.some(
+      d => (d as ActionTestSummary).testStatus === 'Success'
+    )
+    last.testStatus = anyPassed ? 'Success' : 'Failure'
+    return last
   })
 }
 
